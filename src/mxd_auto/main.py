@@ -15,7 +15,7 @@ import keyboard
 from mxd_auto.bot import Bot
 from mxd_auto.capture import WindowCapture
 from mxd_auto.config import ROOT, load_config
-from mxd_auto.controller import Controller
+from mxd_auto.controller import Controller, is_known_key
 from mxd_auto.detector import DEFAULT_THRESHOLD, find_monsters, load_templates
 from mxd_auto.navigator import Navigator
 from mxd_auto.terrain import load_platforms
@@ -27,6 +27,9 @@ def main() -> None:
     map_name = combat.get("map")
     if not map_name:
         raise SystemExit("请先在 config.yaml 配置 combat.map(当前地图名)")
+    unknown = [f"{name}: {key}" for name, key in config["keys"].items() if not is_known_key(str(key))]
+    if unknown:
+        raise SystemExit("config.yaml 里有未知键名(可用键名见 controller._SCANCODES):" + ", ".join(unknown))
 
     templates = load_templates(ROOT / "templates" / map_name)
     platforms = load_platforms(ROOT / "maps" / f"{map_name}.yaml")

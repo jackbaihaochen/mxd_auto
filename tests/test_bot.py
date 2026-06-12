@@ -14,8 +14,10 @@ FRAME = np.zeros((600, 1000, 3), dtype=np.uint8)
 def make_bot(detections: list[Detection], player_pos=(500, 500)) -> tuple[Bot, FakeBackend]:
     backend = FakeBackend()
     nav = Navigator([Platform(0, 1000, 500)], attack_range_x=120, attack_range_y=40, max_walk_seconds=3.0)
+    controller = Controller(backend=backend)
+    controller.TAP_SECONDS = 0.0
     bot = Bot(
-        controller=Controller(backend=backend),
+        controller=controller,
         navigator=nav,
         detect=lambda frame: detections,
         player_pos=player_pos,
@@ -47,7 +49,7 @@ def test_tick_attacks_and_releases_movement_in_range():
     d = bot.tick(FRAME, now=0.2)
     assert d.action == "attack"
     assert ("up", "right") in backend.events  # 先松移动键
-    assert backend.events.count(("press", "ctrl")) == 3
+    assert backend.events.count(("down", "ctrl")) == 3
     assert bot.controller.held == frozenset()
 
 
@@ -67,7 +69,7 @@ def test_tick_jump_when_stuck():
     bot.tick(FRAME, now=2.0)
     d = bot.tick(FRAME, now=4.0)
     assert d.action == "jump"
-    assert ("press", "alt") in backend.events
+    assert ("down", "alt") in backend.events
     assert bot.controller.held == frozenset()
 
 

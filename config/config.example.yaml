@@ -13,12 +13,16 @@ capture:
 calibrated_size: null   # 例: [1366, 768]
 
 # 按键设置(喝药/拾取键位暂保留,第一版不使用)
+# 注意键名区分左右:"alt"=左Alt、"altright"=右Alt、"ctrl"=左Ctrl、"ctrlright"=右Ctrl。
+# KuroMS 实测:跳跃绑在右Alt(altright),左Alt 无效!
+# 可用键名:a-z 0-9 f1-f12 up/down/left/right space enter esc tab shift(/right)
+#          insert delete home end pageup pagedown backspace
 keys:
-  attack: "ctrl"      # 攻击键
-  jump: "alt"         # 跳跃键
-  pickup: "z"         # 拾取键
-  hp_potion: "delete" # 红药键
-  mp_potion: "end"    # 蓝药键
+  attack: "ctrl"        # 攻击键
+  jump: "altright"      # 跳跃键(KuroMS 为右Alt)
+  pickup: "z"           # 拾取键
+  hp_potion: "delete"   # 红药键
+  mp_potion: "end"      # 蓝药键
 
 # 全局热键(独立于游戏按键)
 hotkeys:

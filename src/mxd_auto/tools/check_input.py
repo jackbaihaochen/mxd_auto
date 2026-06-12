@@ -1,12 +1,15 @@
 """阶段 4 验证脚本:按键链路 + 紧急停止。
 
 用法:
-    python -m mxd_auto.tools.check_input
+    python -m mxd_auto.tools.check_input              # 完整测试:走/跳/攻击循环
+    python -m mxd_auto.tools.check_input --key altright --times 3   # 单键测试
 
-启动后切到游戏窗口,角色会循环:右走 1 秒 → 左走 1 秒 → 跳 → 攻击 3 次。
+完整模式:切到游戏窗口后,角色循环:右走 1 秒 → 左走 1 秒 → 跳 → 攻击 3 次。
+单键模式:每秒点按一次指定键,肉眼核对游戏内效果(核对键位用)。
 F12 随时立停(松开所有键),30 秒后自动结束。请在安全地图测试。
 """
 
+import argparse
 import threading
 import time
 
@@ -14,16 +17,26 @@ import keyboard
 
 from mxd_auto.capture import WindowCapture
 from mxd_auto.config import load_config
-from mxd_auto.controller import Controller
+from mxd_auto.controller import Controller, is_known_key
 
 MAX_RUN_SECONDS = 30
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="按键链路验证")
+    parser.add_argument("--key", help="只测这个键(每秒点按一次)")
+    parser.add_argument("--times", type=int, default=3, help="单键模式点按次数(默认 3)")
+    args = parser.parse_args()
+
     config = load_config()
     keys = config["keys"]
-    hotkey_stop = (config.get("hotkeys") or {}).get("stop", "f12")
+    unknown = [f"{name}: {key}" for name, key in keys.items() if not is_known_key(str(key))]
+    if unknown:
+        raise SystemExit("config.yaml 里有未知键名(可用键名见 controller._SCANCODES):" + ", ".join(unknown))
+    if args.key and not is_known_key(args.key):
+        raise SystemExit(f"未知键名 {args.key!r}")
 
+    hotkey_stop = (config.get("hotkeys") or {}).get("stop", "f12")
     stop = threading.Event()
     keyboard.add_hotkey(hotkey_stop, stop.set)
     print(f"紧急停止热键: {hotkey_stop}")
@@ -35,16 +48,36 @@ def main() -> None:
             "游戏以管理员运行而本脚本不是,按键会被 Windows 静默丢弃(UIPI)。\n"
             "请用管理员 PowerShell 重新运行:右键开始菜单 → Windows PowerShell(管理员)。"
         )
-    print(f"找到窗口 {cap.title!r},请在 10 秒内点击游戏窗口使其获得焦点…")
+    print(f"找到窗口 {cap.title!r},正在把游戏拉到前台…")
+    cap.bring_to_foreground()
     deadline = time.monotonic() + 10
     while not cap.is_foreground():
         if stop.is_set() or time.monotonic() > deadline:
             print("未获得焦点或已停止,退出")
             return
-        time.sleep(0.2)
-    print(f"开始测试,{hotkey_stop} 立停,{MAX_RUN_SECONDS} 秒后自动结束")
+        print("请点击游戏窗口使其获得焦点…")
+        time.sleep(1.0)
 
     controller = Controller()
+    try:
+        if args.key:
+            print(f"单键测试: {args.key} x{args.times},观察游戏内效果")
+            for i in range(args.times):
+                if stop.is_set():
+                    break
+                print(f"  按下 {args.key} ({i + 1}/{args.times})")
+                controller.press(args.key)
+                stop.wait(1.0)
+        else:
+            run_full_loop(controller, cap, keys, stop)
+    finally:
+        controller.release_all()
+        cap.close()
+    print("已停止(热键)" if stop.is_set() else "测试结束")
+
+
+def run_full_loop(controller: Controller, cap: WindowCapture, keys: dict, stop: threading.Event) -> None:
+    print(f"开始测试,{MAX_RUN_SECONDS} 秒后自动结束")
     end = time.monotonic() + MAX_RUN_SECONDS
 
     def walk(key: str, seconds: float) -> None:
@@ -53,29 +86,24 @@ def main() -> None:
         stop.wait(seconds)  # stop 触发立即返回,不用死板 sleep
         controller.release(key)
 
-    try:
-        while not stop.is_set() and time.monotonic() < end:
-            if not cap.is_foreground():
-                controller.release_all()
-                print("  窗口失焦,暂停(点回游戏窗口继续)")
-                time.sleep(0.5)
-                continue
-            walk("right", 1.0)
-            if stop.is_set():
-                break
-            walk("left", 1.0)
-            if stop.is_set():
-                break
-            print(f"  跳跃 ({keys['jump']})")
-            controller.press(keys["jump"])
-            stop.wait(0.5)
-            print(f"  攻击 ({keys['attack']}) x3")
-            controller.press(keys["attack"], presses=3)
-            stop.wait(0.5)
-    finally:
-        controller.release_all()
-        cap.close()
-    print("已停止(F12)" if stop.is_set() else "测试结束")
+    while not stop.is_set() and time.monotonic() < end:
+        if not cap.is_foreground():
+            controller.release_all()
+            print("  窗口失焦,暂停(点回游戏窗口继续)")
+            time.sleep(0.5)
+            continue
+        walk("right", 1.0)
+        if stop.is_set():
+            break
+        walk("left", 1.0)
+        if stop.is_set():
+            break
+        print(f"  跳跃 ({keys['jump']})")
+        controller.press(keys["jump"])
+        stop.wait(0.5)
+        print(f"  攻击 ({keys['attack']}) x3")
+        controller.press(keys["attack"], presses=3)
+        stop.wait(0.5)
 
 
 if __name__ == "__main__":
