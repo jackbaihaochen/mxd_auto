@@ -35,6 +35,30 @@ TEMPLATES_DIR = ROOT / "templates"
 MAPS_DIR = ROOT / "maps"
 
 
+def open_capture(config: dict, title: str | None = None) -> WindowCapture:
+    method = (config.get("capture") or {}).get("method", "auto")
+    cap = WindowCapture(title or config["window_title"], method=method)
+    print(f"窗口: {cap.title!r},抓图后端: {cap.method}")
+    if cap.elevation_mismatch():
+        print(
+            "警告:游戏以管理员运行而本脚本不是——截图可能被遮挡干扰、按键会被系统丢弃。\n"
+            "      请用管理员 PowerShell 重新运行(右键开始菜单 → Windows PowerShell(管理员))。"
+        )
+    return cap
+
+
+def grab_clean(cap: WindowCapture, overlay_window: str | None = None) -> np.ndarray:
+    """抓一帧干净画面:mss 后端会先关掉我们自己的浮窗并把游戏拉回前台,防止遮挡入镜。"""
+    if cap.method == "mss":
+        if overlay_window is not None:
+            try:
+                cv2.destroyWindow(overlay_window)
+            except cv2.error:
+                pass
+        cap.bring_to_foreground()
+    return cap.grab()
+
+
 def default_player_pos(width: int, height: int) -> tuple[int, int]:
     """镜头跟随时角色在客户区的位置:水平居中、垂直中心偏下。"""
     return width // 2, round(height * 0.6)
@@ -81,12 +105,10 @@ def draw_detections(frame: np.ndarray, detections: list[Detection]) -> np.ndarra
 
 
 def cmd_screenshot(args: argparse.Namespace) -> None:
-    title = args.title or load_config()["window_title"]
-    with WindowCapture(title) as cap:
+    with open_capture(load_config(), args.title) as cap:
         left, top, width, height = cap.client_rect()
-        print(f"窗口: {cap.title!r} (hwnd={cap.hwnd})")
         print(f"客户区: 左上 ({left}, {top}),大小 {width}x{height}")
-        frame = cap.grab()
+        frame = grab_clean(cap)
     out = CAPTURES_DIR / f"screenshot_{time.strftime('%Y%m%d_%H%M%S')}.png"
     save_image(frame, out)
     print(f"已保存 {out} ({frame.shape[1]}x{frame.shape[0]})")
@@ -99,9 +121,9 @@ def cmd_template(args: argparse.Namespace) -> None:
     print("操作说明:每轮重新抓一帧 → 鼠标框住一只怪 → 空格/回车确认保存;")
     print("不框直接空格/回车(或按 c 取消)结束。窗口标题: select monster")
     saved = 0
-    with WindowCapture(config["window_title"]) as cap:
+    with open_capture(config) as cap:
         while True:
-            frame = cap.grab()
+            frame = grab_clean(cap, overlay_window="select monster")
             x, y, w, h = cv2.selectROI("select monster", frame, showCrosshair=True)
             if w == 0 or h == 0:
                 break
@@ -181,8 +203,8 @@ def cmd_platforms(args: argparse.Namespace) -> None:
     if args.image:
         frame = imread_bgr(Path(args.image))
     else:
-        with WindowCapture(config["window_title"]) as cap:
-            frame = cap.grab()
+        with open_capture(config) as cap:
+            frame = grab_clean(cap)
     candidates = detect_platform_candidates(frame)
     print(f"自动检测到 {len(candidates)} 条平台候选线(仅供参考,请人工修正)")
     print("操作:左键拖拽补画平台线;右键点线附近删除;s 保存退出;q/Esc 放弃")
@@ -237,7 +259,9 @@ def cmd_preview(args: argparse.Namespace) -> None:
         return
 
     print("实时预览中,按 q 或 Esc 退出(本工具不会按任何游戏键)")
-    with WindowCapture(config["window_title"]) as cap:
+    with open_capture(config) as cap:
+        if cap.method == "mss":
+            print("提示:当前是 mss 抓屏,请把 preview 窗口拖到不遮挡游戏画面的位置")
         while True:
             start = time.monotonic()
             frame = cap.grab()

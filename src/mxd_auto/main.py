@@ -32,7 +32,14 @@ def main() -> None:
     platforms = load_platforms(ROOT / "maps" / f"{map_name}.yaml")
     print(f"地图 {map_name}: {len(templates)} 个模板(含镜像),{len(platforms)} 条平台线")
 
-    cap = WindowCapture(config["window_title"])
+    method = (config.get("capture") or {}).get("method", "auto")
+    cap = WindowCapture(config["window_title"], method=method)
+    if cap.elevation_mismatch():
+        raise SystemExit(
+            "游戏以管理员运行而本脚本不是,按键会被 Windows 静默丢弃(UIPI)。\n"
+            "请用管理员 PowerShell 重新运行:右键开始菜单 → Windows PowerShell(管理员)。"
+        )
+    print(f"抓图后端: {cap.method}")
     _, _, width, height = cap.client_rect()
     calibrated = config.get("calibrated_size")
     if calibrated and list(calibrated) != [width, height]:

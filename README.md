@@ -37,6 +37,10 @@ copy config\config.example.yaml config\config.yaml   # 然后按自己的键位�
 
 ## 使用流程
 
+> ⚠️ **必须用管理员 PowerShell 运行**(右键开始菜单 → Windows PowerShell(管理员))。
+> 私服客户端通常以管理员权限运行,普通权限脚本发的按键会被 Windows 静默丢弃(UIPI),
+> 截图也只能退化为"抓屏幕"模式(会被别的窗口遮挡)。脚本启动时会自动检测并提示。
+
 ```powershell
 # 0. 验证截图链路(游戏开窗口模式)
 python -m mxd_auto.tools.calibrate screenshot

@@ -1,7 +1,13 @@
 # 复制本文件为 config.yaml 后按自己的键位修改
 
-# 游戏窗口标题(子串匹配,用于定位窗口)
+# 游戏窗口标题(子串匹配,用于定位窗口),例如 "KuroMS"
 window_title: "MapleStory"
+
+# 抓图后端:auto = 优先 PrintWindow(可后台抓、不怕窗口遮挡),失败回退 mss 屏幕抓取
+# 注意:游戏若以管理员运行,本脚本也必须用管理员 PowerShell 启动,
+# 否则按键被系统静默丢弃(UIPI)、PrintWindow 也会失败
+capture:
+  method: auto   # auto | printwindow | mss
 
 # 标定时的客户区大小;运行时不一致会警告(模板匹配不抗缩放)
 calibrated_size: null   # 例: [1366, 768]

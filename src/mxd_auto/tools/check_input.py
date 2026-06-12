@@ -28,7 +28,13 @@ def main() -> None:
     keyboard.add_hotkey(hotkey_stop, stop.set)
     print(f"紧急停止热键: {hotkey_stop}")
 
-    cap = WindowCapture(config["window_title"])
+    method = (config.get("capture") or {}).get("method", "auto")
+    cap = WindowCapture(config["window_title"], method=method)
+    if cap.elevation_mismatch():
+        raise SystemExit(
+            "游戏以管理员运行而本脚本不是,按键会被 Windows 静默丢弃(UIPI)。\n"
+            "请用管理员 PowerShell 重新运行:右键开始菜单 → Windows PowerShell(管理员)。"
+        )
     print(f"找到窗口 {cap.title!r},请在 10 秒内点击游戏窗口使其获得焦点…")
     deadline = time.monotonic() + 10
     while not cap.is_foreground():
