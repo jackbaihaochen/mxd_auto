@@ -1,0 +1,20 @@
+# 复制本文件为 config.yaml 后按自己的键位修改
+
+# 游戏窗口标题(用于定位窗口)
+window_title: "MapleStory"
+
+# 按键设置
+keys:
+  attack: "ctrl"      # 攻击键
+  jump: "alt"         # 跳跃键
+  pickup: "z"         # 拾取键
+  hp_potion: "delete" # 红药键
+  mp_potion: "end"    # 蓝药键
+
+# 自动喝药阈值(百分比)
+potion:
+  hp_threshold: 50
+  mp_threshold: 30
+
+# 主循环间隔(秒)
+loop_interval: 0.1
