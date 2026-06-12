@@ -3,9 +3,10 @@
 用法:
     python -m mxd_auto.tools.calibrate screenshot [--title 标题子串]
     python -m mxd_auto.tools.calibrate template <地图名>
+    python -m mxd_auto.tools.calibrate platforms <地图名> [--image 截图路径]
     python -m mxd_auto.tools.calibrate preview [--image 截图路径] [--map 地图名]
 
-后续阶段会陆续加入 minimap / platforms 子命令。
+后续阶段会陆续加入 minimap 子命令。
 """
 
 import argparse
@@ -21,11 +22,29 @@ from mxd_auto.detector import (
     DEFAULT_THRESHOLD,
     Detection,
     find_monsters,
-    imread_gray,
     load_templates,
+)
+from mxd_auto.terrain import (
+    Platform,
+    detect_platform_candidates,
+    load_platforms,
+    save_platforms,
 )
 
 TEMPLATES_DIR = ROOT / "templates"
+MAPS_DIR = ROOT / "maps"
+
+
+def default_player_pos(width: int, height: int) -> tuple[int, int]:
+    """镜头跟随时角色在客户区的位置:水平居中、垂直中心偏下。"""
+    return width // 2, round(height * 0.6)
+
+
+def get_player_pos(config: dict, width: int, height: int) -> tuple[int, int]:
+    pos = (config.get("player") or {}).get("pos")
+    if pos:
+        return int(pos[0]), int(pos[1])
+    return default_player_pos(width, height)
 
 
 def save_image(image: np.ndarray, path: Path) -> None:
@@ -98,6 +117,93 @@ def cmd_template(args: argparse.Namespace) -> None:
     print(f"共保存 {saved} 张模板到 {out_dir}")
 
 
+def draw_platforms(canvas: np.ndarray, platforms: list[Platform], color=(255, 128, 0)) -> None:
+    for p in platforms:
+        cv2.line(canvas, (p.x1, p.y), (p.x2, p.y), color, 2)
+        cv2.circle(canvas, (p.x1, p.y), 4, color, -1)
+        cv2.circle(canvas, (p.x2, p.y), 4, color, -1)
+
+
+class PlatformEditor:
+    """鼠标交互编辑平台线:左键拖拽画线,右键删除最近的线。"""
+
+    CLICK_DELETE_DISTANCE = 10
+
+    def __init__(self, frame: np.ndarray, platforms: list[Platform]):
+        self.frame = frame
+        self.platforms = platforms
+        self.drag_start: tuple[int, int] | None = None
+        self.drag_now: tuple[int, int] | None = None
+
+    def on_mouse(self, event: int, x: int, y: int, _flags: int, _param) -> None:
+        if event == cv2.EVENT_LBUTTONDOWN:
+            self.drag_start = (x, y)
+            self.drag_now = (x, y)
+        elif event == cv2.EVENT_MOUSEMOVE and self.drag_start:
+            self.drag_now = (x, y)
+        elif event == cv2.EVENT_LBUTTONUP and self.drag_start:
+            x0, y0 = self.drag_start
+            if abs(x - x0) >= 10:  # 拖拽足够长才算画线,y 取按下点(强制水平)
+                self.platforms.append(Platform(x0, x, y0))
+            self.drag_start = self.drag_now = None
+        elif event == cv2.EVENT_RBUTTONDOWN:
+            self._delete_near(x, y)
+
+    def _delete_near(self, x: int, y: int) -> None:
+        def distance(p: Platform) -> float:
+            dx = max(p.x1 - x, 0, x - p.x2)
+            return (dx**2 + (p.y - y) ** 2) ** 0.5
+
+        if self.platforms:
+            nearest = min(self.platforms, key=distance)
+            if distance(nearest) <= self.CLICK_DELETE_DISTANCE:
+                self.platforms.remove(nearest)
+
+    def render(self) -> np.ndarray:
+        canvas = self.frame.copy()
+        draw_platforms(canvas, self.platforms)
+        if self.drag_start and self.drag_now:
+            cv2.line(canvas, self.drag_start, (self.drag_now[0], self.drag_start[1]), (0, 255, 255), 2)
+        cv2.putText(
+            canvas,
+            f"platforms: {len(self.platforms)}  [drag]=add  [right-click]=del  [s]=save  [q]=quit",
+            (8, 20),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (0, 255, 255),
+            2,
+        )
+        return canvas
+
+
+def cmd_platforms(args: argparse.Namespace) -> None:
+    config = load_config()
+    if args.image:
+        frame = imread_bgr(Path(args.image))
+    else:
+        with WindowCapture(config["window_title"]) as cap:
+            frame = cap.grab()
+    candidates = detect_platform_candidates(frame)
+    print(f"自动检测到 {len(candidates)} 条平台候选线(仅供参考,请人工修正)")
+    print("操作:左键拖拽补画平台线;右键点线附近删除;s 保存退出;q/Esc 放弃")
+
+    editor = PlatformEditor(frame, list(candidates))
+    cv2.namedWindow("platforms")
+    cv2.setMouseCallback("platforms", editor.on_mouse)
+    while True:
+        cv2.imshow("platforms", editor.render())
+        key = cv2.waitKey(30) & 0xFF
+        if key == ord("s"):
+            out = MAPS_DIR / f"{args.map}.yaml"
+            save_platforms(out, editor.platforms, (frame.shape[1], frame.shape[0]))
+            print(f"已保存 {len(editor.platforms)} 条平台线到 {out}")
+            break
+        if key in (27, ord("q")):
+            print("已放弃,未保存")
+            break
+    cv2.destroyAllWindows()
+
+
 def cmd_preview(args: argparse.Namespace) -> None:
     config = load_config()
     combat = config.get("combat", {})
@@ -108,12 +214,23 @@ def cmd_preview(args: argparse.Namespace) -> None:
     templates = load_templates(TEMPLATES_DIR / map_name)
     print(f"已加载 {len(templates)} 个模板(含镜像),阈值 {threshold}")
 
+    map_file = MAPS_DIR / f"{map_name}.yaml"
+    platforms = load_platforms(map_file) if map_file.exists() else []
+    print(f"已加载 {len(platforms)} 条平台线" if platforms else f"无平台数据({map_file} 不存在)")
+
+    def annotate(frame: np.ndarray, detections: list[Detection]) -> np.ndarray:
+        canvas = draw_detections(frame, detections)
+        draw_platforms(canvas, platforms)
+        px, py = get_player_pos(config, frame.shape[1], frame.shape[0])
+        cv2.drawMarker(canvas, (px, py), (0, 0, 255), cv2.MARKER_CROSS, 16, 2)
+        return canvas
+
     if args.image:
         frame = imread_bgr(Path(args.image))
         detections = find_monsters(frame, templates, threshold)
         for d in detections:
             print(f"  {d.template} score={d.score:.3f} at ({d.x},{d.y}) {d.w}x{d.h}")
-        cv2.imshow("preview", draw_detections(frame, detections))
+        cv2.imshow("preview", annotate(frame, detections))
         print("按任意键退出")
         cv2.waitKey(0)
         cv2.destroyAllWindows()
@@ -125,7 +242,7 @@ def cmd_preview(args: argparse.Namespace) -> None:
             start = time.monotonic()
             frame = cap.grab()
             detections = find_monsters(frame, templates, threshold)
-            canvas = draw_detections(frame, detections)
+            canvas = annotate(frame, detections)
             elapsed_ms = (time.monotonic() - start) * 1000
             cv2.putText(
                 canvas,
@@ -155,7 +272,12 @@ def main() -> None:
     p_template.add_argument("map", help="地图名(模板目录名)")
     p_template.set_defaults(func=cmd_template)
 
-    p_preview = sub.add_parser("preview", help="实时预览怪物识别结果(不按任何键)")
+    p_platforms = sub.add_parser("platforms", help="标定平台线(自动检测 + 人工修正)")
+    p_platforms.add_argument("map", help="地图名(存到 maps/<地图名>.yaml)")
+    p_platforms.add_argument("--image", help="对静态截图标定,而不是实时抓屏")
+    p_platforms.set_defaults(func=cmd_platforms)
+
+    p_preview = sub.add_parser("preview", help="实时预览怪物识别+平台线+玩家点(不按任何键)")
     p_preview.add_argument("--image", help="对静态截图运行识别,而不是实时抓屏")
     p_preview.add_argument("--map", help="地图名(默认读配置 combat.map)")
     p_preview.set_defaults(func=cmd_preview)
