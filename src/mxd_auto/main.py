@@ -4,20 +4,7 @@
     python -m mxd_auto.main
 """
 
-from pathlib import Path
-
-import yaml
-
-CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "config.yaml"
-
-
-def load_config() -> dict:
-    if not CONFIG_PATH.exists():
-        raise FileNotFoundError(
-            f"未找到配置文件 {CONFIG_PATH},请先复制 config/config.example.yaml 为 config/config.yaml"
-        )
-    with CONFIG_PATH.open(encoding="utf-8") as f:
-        return yaml.safe_load(f)
+from mxd_auto.config import load_config
 
 
 def main() -> None:
