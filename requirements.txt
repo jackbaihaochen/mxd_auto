@@ -1,9 +1,15 @@
-# 按键与鼠标模拟
-pyautogui>=0.9.54
-# 图像识别(后续做画面检测时使用)
+# 图像识别
 opencv-python>=4.9
 numpy>=1.26
 # 截图
 mss>=9.0
+# 窗口定位(win32gui)
+pywin32>=306
+# 按键模拟(DirectInput 扫描码)
+pydirectinput>=1.0.4
+# 全局热键(F12 紧急停止)
+keyboard>=0.13.5
 # 配置文件
 PyYAML>=6.0
+# 测试
+pytest>=8.0
