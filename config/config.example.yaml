@@ -1,9 +1,12 @@
 # 复制本文件为 config.yaml 后按自己的键位修改
 
-# 游戏窗口标题(用于定位窗口)
+# 游戏窗口标题(子串匹配,用于定位窗口)
 window_title: "MapleStory"
 
-# 按键设置
+# 标定时的客户区大小;运行时不一致会警告(模板匹配不抗缩放)
+calibrated_size: null   # 例: [1366, 768]
+
+# 按键设置(喝药/拾取键位暂保留,第一版不使用)
 keys:
   attack: "ctrl"      # 攻击键
   jump: "alt"         # 跳跃键
@@ -11,10 +14,31 @@ keys:
   hp_potion: "delete" # 红药键
   mp_potion: "end"    # 蓝药键
 
-# 自动喝药阈值(百分比)
-potion:
-  hp_threshold: 50
-  mp_threshold: 30
+# 全局热键(独立于游戏按键)
+hotkeys:
+  stop: "f12"   # 紧急停止
+  pause: "f11"  # 暂停/恢复
+
+# 战斗与识别
+combat:
+  map: null             # 当前地图名(对应 templates/<map>/ 与 maps/<map>.yaml)
+  match_threshold: 0.75 # 模板匹配阈值,误检多调高、漏检多调低
+  attack_range_x: 120   # 攻击范围(与怪物的水平像素距离)
+  attack_range_y: 40    # 攻击范围(垂直像素距离)
+  attack_presses: 3     # 进入范围后连按攻击键次数
+  max_walk_seconds: 3.0 # 持续走超过该秒数仍未接近则跳一下防卡墙
+
+# 玩家在客户区中的固定位置(镜头跟随);null = 客户区中心偏下
+player:
+  pos: null   # 例: [683, 420]
+
+# 小地图区域(calibrate minimap 生成)
+minimap:
+  rect: null  # 例: [10, 60, 180, 120]  (left, top, width, height)
+
+# 调试
+debug:
+  save_frames: false  # 保存每帧识别结果到 captures/
 
 # 主循环间隔(秒)
 loop_interval: 0.1
