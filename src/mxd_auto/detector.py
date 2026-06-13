@@ -103,6 +103,28 @@ def _nms(detections: list[Detection], iou_threshold: float = NMS_IOU_THRESHOLD) 
     return kept
 
 
+def find_player(
+    frame: np.ndarray,
+    template: np.ndarray,
+    threshold: float = 0.7,
+) -> tuple[int, int] | None:
+    """用角色名牌模板定位玩家,返回脚底坐标(名牌上沿中点≈脚底)。
+
+    名牌(角色脚下那块深色名字标签)不随动作/朝向变化,是最稳定的锚点。
+    取全帧最高分位置;低于阈值视为没找到(换图/被遮挡)。
+    """
+    gray = _to_gray(frame)
+    th, tw = template.shape[:2]
+    if gray.shape[0] < th or gray.shape[1] < tw:
+        return None
+    res = cv2.matchTemplate(gray, template, cv2.TM_CCOEFF_NORMED)
+    _, max_val, _, max_loc = cv2.minMaxLoc(res)
+    if max_val < threshold:
+        return None
+    x, y = max_loc
+    return x + tw // 2, y
+
+
 def find_monsters(
     frame: np.ndarray,
     templates: Sequence[Template],

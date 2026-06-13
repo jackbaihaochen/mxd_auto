@@ -105,6 +105,19 @@ def test_load_templates_rejects_flat(tmp_path):
             load_templates(tmp_path)
 
 
+def test_find_player_returns_feet_at_template_top_center(canvas, monster):
+    from mxd_auto.detector import find_player
+
+    paste(canvas, monster, 100, 50)  # 名牌 18 宽,上沿中点 = (109, 50)
+    assert find_player(canvas, monster, threshold=0.9) == (109, 50)
+
+
+def test_find_player_none_when_absent(canvas, monster):
+    from mxd_auto.detector import find_player
+
+    assert find_player(canvas, monster, threshold=0.9) is None
+
+
 def test_detection_center():
     det = Detection(x=10, y=20, w=18, h=24, score=1.0, template="t")
     assert det.center == (19, 32)

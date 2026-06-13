@@ -15,6 +15,7 @@ from mxd_auto.detector import Detection, find_monsters
 from mxd_auto.navigator import Decision, Navigator
 
 DetectFn = Callable[[np.ndarray], Sequence[Detection]]
+LocateFn = Callable[[np.ndarray], "tuple[int, int] | None"]
 
 
 class Bot:
@@ -23,7 +24,7 @@ class Bot:
         controller: Controller,
         navigator: Navigator,
         detect: DetectFn,
-        player_pos: tuple[int, int],
+        locate_player: LocateFn,
         attack_key: str,
         jump_key: str,
         attack_presses: int = 3,
@@ -31,7 +32,7 @@ class Bot:
         self.controller = controller
         self.navigator = navigator
         self.detect = detect
-        self.player_pos = player_pos
+        self.locate_player = locate_player
         self.attack_key = attack_key
         self.jump_key = jump_key
         self.attack_presses = attack_presses
@@ -39,9 +40,14 @@ class Bot:
     def tick(self, frame: np.ndarray, now: float | None = None) -> Decision:
         """识别一帧并执行决策;返回 Decision 供日志/测试。"""
         now = time.monotonic() if now is None else now
+        player = self.locate_player(frame)
+        if player is None:
+            decision = Decision("idle", reason="未定位到玩家(名牌被遮挡或换图)")
+            self._apply(decision)
+            return decision
         detections = self.detect(frame)
         feet = [(d.center[0], d.y + d.h) for d in detections]  # 怪物脚底 = 框底边中点
-        decision = self.navigator.decide(self.player_pos, feet, now)
+        decision = self.navigator.decide(player, feet, now)
         self._apply(decision)
         return decision
 

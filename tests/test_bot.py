@@ -20,7 +20,7 @@ def make_bot(detections: list[Detection], player_pos=(500, 500)) -> tuple[Bot, F
         controller=controller,
         navigator=nav,
         detect=lambda frame: detections,
-        player_pos=player_pos,
+        locate_player=lambda frame: player_pos,
         attack_key="ctrl",
         jump_key="alt",
         attack_presses=3,
@@ -78,3 +78,13 @@ def test_tick_idle_releases_movement_when_airborne():
     d = bot.tick(FRAME, now=0.0)
     assert d.action == "idle"
     assert bot.controller.held == frozenset()
+
+
+def test_tick_idle_when_player_not_found():
+    bot, backend = make_bot([monster_at(900, 500)])
+    bot.tick(FRAME, now=0.0)  # 先走起来
+    bot.locate_player = lambda frame: None  # 名牌丢失(换图/被遮挡)
+    d = bot.tick(FRAME, now=0.1)
+    assert d.action == "idle"
+    assert "未定位到玩家" in d.reason
+    assert bot.controller.held == frozenset()  # 必须松开移动键

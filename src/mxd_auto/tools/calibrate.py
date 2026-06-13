@@ -4,6 +4,7 @@
     python -m mxd_auto.tools.calibrate screenshot [--title 标题子串]
     python -m mxd_auto.tools.calibrate template <地图名>
     python -m mxd_auto.tools.calibrate platforms <地图名> [--image 截图路径]
+    python -m mxd_auto.tools.calibrate player
     python -m mxd_auto.tools.calibrate preview [--image 截图路径] [--map 地图名]
 
 后续阶段会陆续加入 minimap 子命令。
@@ -22,12 +23,15 @@ from mxd_auto.detector import (
     DEFAULT_THRESHOLD,
     Detection,
     find_monsters,
+    find_player,
+    imread_gray,
     load_templates,
 )
 from mxd_auto.terrain import (
     Platform,
     detect_platform_candidates,
     load_platforms,
+    platform_of,
     save_platforms,
 )
 
@@ -59,16 +63,24 @@ def grab_clean(cap: WindowCapture, overlay_window: str | None = None) -> np.ndar
     return cap.grab()
 
 
-def default_player_pos(width: int, height: int) -> tuple[int, int]:
-    """镜头跟随时角色在客户区的位置:水平居中、垂直中心偏下。"""
-    return width // 2, round(height * 0.6)
+PLAYER_TEMPLATE_PATH = TEMPLATES_DIR / "player.png"
 
 
-def get_player_pos(config: dict, width: int, height: int) -> tuple[int, int]:
-    pos = (config.get("player") or {}).get("pos")
+def build_player_locator(config: dict):
+    """与 main.py 同一套定位策略:固定坐标 > 名牌模板 > 中心偏下兜底。"""
+    player_cfg = config.get("player") or {}
+    pos = player_cfg.get("pos")
     if pos:
-        return int(pos[0]), int(pos[1])
-    return default_player_pos(width, height)
+        fixed = (int(pos[0]), int(pos[1]))
+        print(f"玩家定位:固定坐标 {fixed}(player.pos)")
+        return lambda frame: fixed
+    if PLAYER_TEMPLATE_PATH.exists():
+        template = imread_gray(PLAYER_TEMPLATE_PATH)
+        threshold = player_cfg.get("match_threshold", 0.7)
+        print("玩家定位:名牌模板 templates/player.png")
+        return lambda frame: find_player(frame, template, threshold)
+    print("玩家定位:中心偏下兜底(仅镜头跟随的大地图准确;建议运行 calibrate player)")
+    return lambda frame: (frame.shape[1] // 2, round(frame.shape[0] * 0.6))
 
 
 def save_image(image: np.ndarray, path: Path) -> None:
@@ -226,6 +238,21 @@ def cmd_platforms(args: argparse.Namespace) -> None:
     cv2.destroyAllWindows()
 
 
+def cmd_player(args: argparse.Namespace) -> None:
+    config = load_config()
+    print("请框住角色脚下的【名牌】(名字标签)——它不随动作变化,是定位锚点。")
+    print("框好后空格/回车确认;名牌上沿会被当作脚底高度。")
+    with open_capture(config) as cap:
+        frame = grab_clean(cap, overlay_window="select player nametag")
+        x, y, w, h = cv2.selectROI("select player nametag", frame, showCrosshair=True)
+    cv2.destroyAllWindows()
+    if w == 0 or h == 0:
+        print("未框选,已取消")
+        return
+    save_image(frame[y : y + h, x : x + w], PLAYER_TEMPLATE_PATH)
+    print(f"已保存 {PLAYER_TEMPLATE_PATH} ({w}x{h}),preview/main 将自动使用")
+
+
 def cmd_preview(args: argparse.Namespace) -> None:
     config = load_config()
     combat = config.get("combat", {})
@@ -239,19 +266,48 @@ def cmd_preview(args: argparse.Namespace) -> None:
     map_file = MAPS_DIR / f"{map_name}.yaml"
     platforms = load_platforms(map_file) if map_file.exists() else []
     print(f"已加载 {len(platforms)} 条平台线" if platforms else f"无平台数据({map_file} 不存在)")
+    y_tol = combat.get("y_tolerance", 20)
+    locate = build_player_locator(config)
 
     def annotate(frame: np.ndarray, detections: list[Detection]) -> np.ndarray:
+        """诊断视图:怪物框+脚点+归属平台、平台线、玩家点+所在平台。
+
+        脚点绿色=与玩家同平台(会被攻击),橙色=不同平台/无平台(会被忽略)。
+        """
         canvas = draw_detections(frame, detections)
         draw_platforms(canvas, platforms)
-        px, py = get_player_pos(config, frame.shape[1], frame.shape[0])
-        cv2.drawMarker(canvas, (px, py), (0, 0, 255), cv2.MARKER_CROSS, 16, 2)
+        player = locate(frame)
+        player_platform = platform_of(player, platforms, y_tol) if player else None
+        if player:
+            cv2.drawMarker(canvas, player, (0, 0, 255), cv2.MARKER_CROSS, 20, 2)
+            label = f"player y={player[1]} plat={'y' + str(player_platform.y) if player_platform else 'NONE!'}"
+            cv2.putText(canvas, label, (player[0] - 60, player[1] + 28),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+        else:
+            cv2.putText(canvas, "PLAYER NOT FOUND", (8, 44),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+        for d in detections:
+            feet = (d.center[0], d.y + d.h)
+            plat = platform_of(feet, platforms, y_tol)
+            same = plat is not None and plat == player_platform
+            color = (0, 255, 0) if same else (0, 165, 255)
+            cv2.circle(canvas, feet, 5, color, -1)
+            text = f"y{plat.y}" if plat else "no-plat"
+            cv2.putText(canvas, text, (feet[0] - 18, feet[1] + 16),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
         return canvas
 
     if args.image:
         frame = imread_bgr(Path(args.image))
         detections = find_monsters(frame, templates, threshold)
+        player = locate(frame)
+        player_platform = platform_of(player, platforms, y_tol) if player else None
+        print(f"玩家: {player},所在平台: {player_platform}")
         for d in detections:
-            print(f"  {d.template} score={d.score:.3f} at ({d.x},{d.y}) {d.w}x{d.h}")
+            feet = (d.center[0], d.y + d.h)
+            plat = platform_of(feet, platforms, y_tol)
+            print(f"  {d.template} score={d.score:.3f} 框({d.x},{d.y},{d.w}x{d.h}) "
+                  f"脚点{feet} 平台={plat} 同平台={plat is not None and plat == player_platform}")
         cv2.imshow("preview", annotate(frame, detections))
         print("按任意键退出")
         cv2.waitKey(0)
@@ -300,6 +356,9 @@ def main() -> None:
     p_platforms.add_argument("map", help="地图名(存到 maps/<地图名>.yaml)")
     p_platforms.add_argument("--image", help="对静态截图标定,而不是实时抓屏")
     p_platforms.set_defaults(func=cmd_platforms)
+
+    p_player = sub.add_parser("player", help="框选角色名牌 → templates/player.png(玩家定位锚点)")
+    p_player.set_defaults(func=cmd_player)
 
     p_preview = sub.add_parser("preview", help="实时预览怪物识别+平台线+玩家点(不按任何键)")
     p_preview.add_argument("--image", help="对静态截图运行识别,而不是实时抓屏")

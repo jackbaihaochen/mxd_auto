@@ -16,7 +16,13 @@ from mxd_auto.bot import Bot
 from mxd_auto.capture import WindowCapture
 from mxd_auto.config import ROOT, load_config
 from mxd_auto.controller import Controller, is_known_key
-from mxd_auto.detector import DEFAULT_THRESHOLD, find_monsters, load_templates
+from mxd_auto.detector import (
+    DEFAULT_THRESHOLD,
+    find_monsters,
+    find_player,
+    imread_gray,
+    load_templates,
+)
 from mxd_auto.navigator import Navigator
 from mxd_auto.terrain import load_platforms
 
@@ -48,8 +54,25 @@ def main() -> None:
     if calibrated and list(calibrated) != [width, height]:
         print(f"警告:当前客户区 {width}x{height} 与标定时 {calibrated} 不一致,模板匹配可能失效!")
 
-    pos = (config.get("player") or {}).get("pos")
-    player_pos = (int(pos[0]), int(pos[1])) if pos else (width // 2, round(height * 0.6))
+    player_cfg = config.get("player") or {}
+    pos = player_cfg.get("pos")
+    player_template_path = ROOT / "templates" / "player.png"
+    if pos:
+        fixed = (int(pos[0]), int(pos[1]))
+        locate_player = lambda frame: fixed  # noqa: E731
+        print(f"玩家定位:固定坐标 {fixed}(player.pos)")
+    elif player_template_path.exists():
+        player_template = imread_gray(player_template_path)
+        player_threshold = player_cfg.get("match_threshold", 0.7)
+        locate_player = lambda frame: find_player(frame, player_template, player_threshold)  # noqa: E731
+        print("玩家定位:名牌模板 templates/player.png(每帧匹配)")
+    else:
+        center = (width // 2, round(height * 0.6))
+        locate_player = lambda frame: center  # noqa: E731
+        print(
+            f"警告:玩家定位用客户区中心偏下 {center} 兜底——只对镜头跟随的大地图成立!\n"
+            "      单屏小地图请运行 calibrate player 截角色名牌,识别精度会大幅提高。"
+        )
 
     stop = threading.Event()
     pause = threading.Event()
@@ -69,12 +92,13 @@ def main() -> None:
         attack_range_x=combat.get("attack_range_x", 120),
         attack_range_y=combat.get("attack_range_y", 40),
         max_walk_seconds=combat.get("max_walk_seconds", 3.0),
+        y_tolerance=combat.get("y_tolerance", 20),
     )
     bot = Bot(
         controller=Controller(),
         navigator=navigator,
         detect=functools.partial(find_monsters, templates=templates, threshold=threshold),
-        player_pos=player_pos,
+        locate_player=locate_player,
         attack_key=config["keys"]["attack"],
         jump_key=config["keys"]["jump"],
         attack_presses=combat.get("attack_presses", 3),
