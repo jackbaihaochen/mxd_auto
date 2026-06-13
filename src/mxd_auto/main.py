@@ -20,7 +20,6 @@ from mxd_auto.detector import (
     DEFAULT_THRESHOLD,
     find_monsters,
     find_player,
-    imread_gray,
     load_templates,
 )
 from mxd_auto.navigator import Navigator
@@ -56,22 +55,22 @@ def main() -> None:
 
     player_cfg = config.get("player") or {}
     pos = player_cfg.get("pos")
-    player_template_path = ROOT / "templates" / "player.png"
+    player_template_dir = ROOT / "templates" / "player"
     if pos:
         fixed = (int(pos[0]), int(pos[1]))
         locate_player = lambda frame: fixed  # noqa: E731
         print(f"玩家定位:固定坐标 {fixed}(player.pos)")
-    elif player_template_path.exists():
-        player_template = imread_gray(player_template_path)
+    elif player_template_dir.exists() and any(player_template_dir.glob("*.png")):
+        player_templates = load_templates(player_template_dir)
         player_threshold = player_cfg.get("match_threshold", 0.7)
-        locate_player = lambda frame: find_player(frame, player_template, player_threshold)  # noqa: E731
-        print("玩家定位:名牌模板 templates/player.png(每帧匹配)")
+        locate_player = lambda frame: find_player(frame, player_templates, player_threshold)  # noqa: E731
+        print(f"玩家定位:形象模板 templates/player/ ({len(player_templates)} 张含镜像)")
     else:
         center = (width // 2, round(height * 0.6))
         locate_player = lambda frame: center  # noqa: E731
         print(
             f"警告:玩家定位用客户区中心偏下 {center} 兜底——只对镜头跟随的大地图成立!\n"
-            "      单屏小地图请运行 calibrate player 截角色名牌,识别精度会大幅提高。"
+            "      单屏小地图请运行 calibrate player 截角色形象,识别精度会大幅提高。"
         )
 
     stop = threading.Event()

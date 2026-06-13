@@ -105,17 +105,26 @@ def test_load_templates_rejects_flat(tmp_path):
             load_templates(tmp_path)
 
 
-def test_find_player_returns_feet_at_template_top_center(canvas, monster):
+def test_find_player_returns_feet_at_box_bottom_center(canvas, monster):
     from mxd_auto.detector import find_player
 
-    paste(canvas, monster, 100, 50)  # 名牌 18 宽,上沿中点 = (109, 50)
-    assert find_player(canvas, monster, threshold=0.9) == (109, 50)
+    paste(canvas, monster, 100, 50)  # 形象 18x24,底边中点(脚底)= (109, 74)
+    assert find_player(canvas, [Template("player", monster)], threshold=0.9) == (109, 74)
+
+
+def test_find_player_picks_best_of_multiple_templates(canvas, monster):
+    from mxd_auto.detector import find_player
+
+    other = np.random.default_rng(99).integers(0, 256, size=(20, 16), dtype=np.uint8)  # 不匹配的姿势
+    paste(canvas, monster, 100, 50)
+    templates = [Template("pose_a", other), Template("pose_b", monster)]
+    assert find_player(canvas, templates, threshold=0.9) == (109, 74)
 
 
 def test_find_player_none_when_absent(canvas, monster):
     from mxd_auto.detector import find_player
 
-    assert find_player(canvas, monster, threshold=0.9) is None
+    assert find_player(canvas, [Template("player", monster)], threshold=0.9) is None
 
 
 def test_detection_center():

@@ -41,11 +41,11 @@ combat:
 
 # 玩家定位(优先级从上到下):
 # 1. pos 固定坐标(仅镜头始终跟随角色的大地图适用)
-# 2. templates/player.png 名牌模板(运行 calibrate player 生成;单屏小地图必须用这个!)
+# 2. templates/player/ 形象模板(calibrate player 连续截站立/走/攻击多张;单屏小地图必须用!)
 # 3. 都没有 → 客户区中心偏下兜底(单屏地图会定位错,Bot 行为全乱)
 player:
   pos: null             # 例: [683, 420]
-  match_threshold: 0.7  # 名牌模板匹配阈值
+  match_threshold: 0.7  # 形象模板匹配阈值
 
 # 小地图区域(calibrate minimap 生成)
 minimap:

@@ -63,22 +63,26 @@ def grab_clean(cap: WindowCapture, overlay_window: str | None = None) -> np.ndar
     return cap.grab()
 
 
-PLAYER_TEMPLATE_PATH = TEMPLATES_DIR / "player.png"
+PLAYER_TEMPLATE_DIR = TEMPLATES_DIR / "player"
+
+
+def has_player_templates() -> bool:
+    return PLAYER_TEMPLATE_DIR.exists() and any(PLAYER_TEMPLATE_DIR.glob("*.png"))
 
 
 def build_player_locator(config: dict):
-    """与 main.py 同一套定位策略:固定坐标 > 名牌模板 > 中心偏下兜底。"""
+    """与 main.py 同一套定位策略:固定坐标 > 形象模板(含镜像)> 中心偏下兜底。"""
     player_cfg = config.get("player") or {}
     pos = player_cfg.get("pos")
     if pos:
         fixed = (int(pos[0]), int(pos[1]))
         print(f"玩家定位:固定坐标 {fixed}(player.pos)")
         return lambda frame: fixed
-    if PLAYER_TEMPLATE_PATH.exists():
-        template = imread_gray(PLAYER_TEMPLATE_PATH)
+    if has_player_templates():
+        templates = load_templates(PLAYER_TEMPLATE_DIR)
         threshold = player_cfg.get("match_threshold", 0.7)
-        print("玩家定位:名牌模板 templates/player.png")
-        return lambda frame: find_player(frame, template, threshold)
+        print(f"玩家定位:形象模板 templates/player/ ({len(templates)} 张含镜像)")
+        return lambda frame: find_player(frame, templates, threshold)
     print("玩家定位:中心偏下兜底(仅镜头跟随的大地图准确;建议运行 calibrate player)")
     return lambda frame: (frame.shape[1] // 2, round(frame.shape[0] * 0.6))
 
@@ -217,9 +221,13 @@ def cmd_platforms(args: argparse.Namespace) -> None:
     else:
         with open_capture(config) as cap:
             frame = grab_clean(cap)
-    candidates = detect_platform_candidates(frame)
-    print(f"自动检测到 {len(candidates)} 条平台候选线(仅供参考,请人工修正)")
-    print("操作:左键拖拽补画平台线;右键点线附近删除;s 保存退出;q/Esc 放弃")
+    if args.auto:
+        candidates = detect_platform_candidates(frame)
+        print(f"--auto:自动检测到 {len(candidates)} 条候选线(多半不准,请人工删改)")
+    else:
+        candidates = []
+        print("空白画布(加 --auto 可预填自动检测候选)")
+    print("操作:左键拖拽画平台线;右键点线附近删除;s 保存退出;q/Esc 放弃")
 
     editor = PlatformEditor(frame, list(candidates))
     cv2.namedWindow("platforms")
@@ -240,17 +248,26 @@ def cmd_platforms(args: argparse.Namespace) -> None:
 
 def cmd_player(args: argparse.Namespace) -> None:
     config = load_config()
-    print("请框住角色脚下的【名牌】(名字标签)——它不随动作变化,是定位锚点。")
-    print("框好后空格/回车确认;名牌上沿会被当作脚底高度。")
+    PLAYER_TEMPLATE_DIR.mkdir(parents=True, exist_ok=True)
+    print("框住角色【形象】(连同脚底,别框进脚下名牌)——和截怪一样的逻辑。")
+    print("角色动作/朝向会变,建议多截几张:站立、走路、攻击各一张;")
+    print("每轮重新抓帧 → 框 → 空格/回车保存;不框直接空格/回车结束。窗口: select player")
+    saved = 0
     with open_capture(config) as cap:
-        frame = grab_clean(cap, overlay_window="select player nametag")
-        x, y, w, h = cv2.selectROI("select player nametag", frame, showCrosshair=True)
+        while True:
+            frame = grab_clean(cap, overlay_window="select player")
+            x, y, w, h = cv2.selectROI("select player", frame, showCrosshair=True)
+            if w == 0 or h == 0:
+                break
+            idx = 1
+            while (PLAYER_TEMPLATE_DIR / f"player_{idx:02d}.png").exists():
+                idx += 1
+            out = PLAYER_TEMPLATE_DIR / f"player_{idx:02d}.png"
+            save_image(frame[y : y + h, x : x + w], out)
+            saved += 1
+            print(f"已保存 {out} ({w}x{h})")
     cv2.destroyAllWindows()
-    if w == 0 or h == 0:
-        print("未框选,已取消")
-        return
-    save_image(frame[y : y + h, x : x + w], PLAYER_TEMPLATE_PATH)
-    print(f"已保存 {PLAYER_TEMPLATE_PATH} ({w}x{h}),preview/main 将自动使用")
+    print(f"共保存 {saved} 张形象模板到 {PLAYER_TEMPLATE_DIR},preview/main 将自动使用")
 
 
 def cmd_preview(args: argparse.Namespace) -> None:
@@ -355,6 +372,7 @@ def main() -> None:
     p_platforms = sub.add_parser("platforms", help="标定平台线(自动检测 + 人工修正)")
     p_platforms.add_argument("map", help="地图名(存到 maps/<地图名>.yaml)")
     p_platforms.add_argument("--image", help="对静态截图标定,而不是实时抓屏")
+    p_platforms.add_argument("--auto", action="store_true", help="预填 HoughLines 自动检测候选(默认空白)")
     p_platforms.set_defaults(func=cmd_platforms)
 
     p_player = sub.add_parser("player", help="框选角色名牌 → templates/player.png(玩家定位锚点)")

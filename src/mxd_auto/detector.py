@@ -105,24 +105,62 @@ def _nms(detections: list[Detection], iou_threshold: float = NMS_IOU_THRESHOLD) 
 
 def find_player(
     frame: np.ndarray,
-    template: np.ndarray,
+    templates: Sequence[Template],
     threshold: float = 0.7,
 ) -> tuple[int, int] | None:
-    """用角色名牌模板定位玩家,返回脚底坐标(名牌上沿中点≈脚底)。
+    """定位玩家:与怪物同一套模板匹配逻辑,多模板(含镜像)取全帧最高分。
 
-    名牌(角色脚下那块深色名字标签)不随动作/朝向变化,是最稳定的锚点。
-    取全帧最高分位置;低于阈值视为没找到(换图/被遮挡)。
+    返回脚底坐标(最佳匹配框底边中点)。角色动作/朝向多变,建议截
+    站立+走路各一张(calibrate player 可连续截多张);裁到脚底,
+    不要把脚下名牌裁进去。低于阈值返回 None(换图/被遮挡)。
     """
     gray = _to_gray(frame)
-    th, tw = template.shape[:2]
-    if gray.shape[0] < th or gray.shape[1] < tw:
-        return None
-    res = cv2.matchTemplate(gray, template, cv2.TM_CCOEFF_NORMED)
-    _, max_val, _, max_loc = cv2.minMaxLoc(res)
-    if max_val < threshold:
-        return None
-    x, y = max_loc
-    return x + tw // 2, y
+    best: tuple[float, tuple[int, int]] | None = None
+    for t in templates:
+        th, tw = t.image.shape[:2]
+        if gray.shape[0] < th or gray.shape[1] < tw:
+            continue
+        res = cv2.matchTemplate(gray, t.image, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+        if max_val >= threshold and (best is None or max_val > best[0]):
+            best = (max_val, (max_loc[0] + tw // 2, max_loc[1] + th))
+    return best[1] if best else None
+
+
+def build_player_locator(config: dict, verbose: bool = True):
+    """玩家定位策略(main 与 preview 共用):
+    player.pos 固定坐标 > templates/player/ 多模板 > 旧版 templates/player.png
+    > 客户区中心偏下兜底(仅镜头跟随的大地图成立)。
+    返回 locate(frame) -> (x, y) | None。
+    """
+    from mxd_auto.config import ROOT
+
+    def say(msg: str) -> None:
+        if verbose:
+            print(msg)
+
+    player_cfg = config.get("player") or {}
+    pos = player_cfg.get("pos")
+    if pos:
+        fixed = (int(pos[0]), int(pos[1]))
+        say(f"玩家定位:固定坐标 {fixed}(player.pos)")
+        return lambda frame: fixed
+    threshold = player_cfg.get("match_threshold", 0.7)
+    player_dir = ROOT / "templates" / "player"
+    if player_dir.is_dir() and any(player_dir.glob("*.png")):
+        templates = load_templates(player_dir)
+        say(f"玩家定位:templates/player/ {len(templates)} 个模板(含镜像)")
+        return lambda frame: find_player(frame, templates, threshold)
+    legacy = ROOT / "templates" / "player.png"
+    if legacy.exists():
+        templates = with_mirrors([Template("player", imread_gray(legacy))])
+        say("玩家定位:旧版 templates/player.png(建议重新运行 calibrate player)")
+        return lambda frame: find_player(frame, templates, threshold)
+    say(
+        "警告:玩家定位用客户区中心偏下兜底——只对镜头跟随的大地图成立!\n"
+        "      单屏小地图请运行 calibrate player 截角色模板。"
+    )
+    return lambda frame: (frame.shape[1] // 2, round(frame.shape[0] * 0.6))
 
 
 def find_monsters(
