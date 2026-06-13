@@ -1,0 +1,59 @@
+# 复制本文件为 config.yaml 后按自己的键位修改
+
+# 游戏窗口标题(子串匹配,用于定位窗口),例如 "KuroMS"
+window_title: "MapleStory"
+
+# 抓图后端:auto = 优先 PrintWindow(可后台抓、不怕窗口遮挡),失败回退 mss 屏幕抓取
+# 注意:游戏若以管理员运行,本脚本也必须用管理员 PowerShell 启动,
+# 否则按键被系统静默丢弃(UIPI)、PrintWindow 也会失败
+capture:
+  method: auto   # auto | printwindow | mss
+
+# 标定时的客户区大小;运行时不一致会警告(模板匹配不抗缩放)
+calibrated_size: null   # 例: [1366, 768]
+
+# 按键设置(喝药/拾取键位暂保留,第一版不使用)
+# 注意键名区分左右:"alt"=左Alt、"altright"=右Alt、"ctrl"=左Ctrl、"ctrlright"=右Ctrl。
+# KuroMS 实测:跳跃绑在右Alt(altright),左Alt 无效!
+# 可用键名:a-z 0-9 f1-f12 up/down/left/right space enter esc tab shift(/right)
+#          insert delete home end pageup pagedown backspace
+keys:
+  attack: "ctrl"        # 攻击键
+  jump: "altright"      # 跳跃键(KuroMS 为右Alt)
+  pickup: "z"           # 拾取键
+  hp_potion: "delete"   # 红药键
+  mp_potion: "end"      # 蓝药键
+
+# 全局热键(独立于游戏按键)
+hotkeys:
+  stop: "f12"   # 紧急停止
+  pause: "f11"  # 暂停/恢复
+
+# 战斗与识别
+combat:
+  map: null             # 当前地图名(对应 templates/<map>/ 与 maps/<map>.yaml)
+  match_threshold: 0.75 # 模板匹配阈值,误检多调高、漏检多调低
+  attack_range_x: 120   # 攻击范围(与怪物的水平像素距离)
+  attack_range_y: 40    # 攻击范围(垂直像素距离)
+  attack_presses: 3     # 进入范围后连按攻击键次数
+  max_walk_seconds: 3.0 # 持续走超过该秒数仍未接近则跳一下防卡墙
+  y_tolerance: 20       # 脚底与平台线的 y 容差(像素);"明明有怪却说不在平台上"时调大
+
+# 玩家定位(优先级从上到下):
+# 1. pos 固定坐标(仅镜头始终跟随角色的大地图适用)
+# 2. templates/player/ 形象模板(calibrate player 连续截站立/走/攻击多张;单屏小地图必须用!)
+# 3. 都没有 → 客户区中心偏下兜底(单屏地图会定位错,Bot 行为全乱)
+player:
+  pos: null             # 例: [683, 420]
+  match_threshold: 0.7  # 形象模板匹配阈值
+
+# 小地图区域(calibrate minimap 生成)
+minimap:
+  rect: null  # 例: [10, 60, 180, 120]  (left, top, width, height)
+
+# 调试
+debug:
+  save_frames: false  # 保存每帧识别结果到 captures/
+
+# 主循环间隔(秒)
+loop_interval: 0.1

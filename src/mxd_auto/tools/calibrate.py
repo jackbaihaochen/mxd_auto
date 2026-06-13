@@ -1,0 +1,391 @@
+"""标定工具(子命令式)。
+
+用法:
+    python -m mxd_auto.tools.calibrate screenshot [--title 标题子串]
+    python -m mxd_auto.tools.calibrate template <地图名>
+    python -m mxd_auto.tools.calibrate platforms <地图名> [--image 截图路径]
+    python -m mxd_auto.tools.calibrate player
+    python -m mxd_auto.tools.calibrate preview [--image 截图路径] [--map 地图名]
+
+后续阶段会陆续加入 minimap 子命令。
+"""
+
+import argparse
+import time
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+from mxd_auto.capture import WindowCapture
+from mxd_auto.config import ROOT, CAPTURES_DIR, load_config
+from mxd_auto.detector import (
+    DEFAULT_THRESHOLD,
+    Detection,
+    find_monsters,
+    find_player,
+    imread_gray,
+    load_templates,
+)
+from mxd_auto.terrain import (
+    Platform,
+    detect_platform_candidates,
+    load_platforms,
+    platform_of,
+    save_platforms,
+)
+
+TEMPLATES_DIR = ROOT / "templates"
+MAPS_DIR = ROOT / "maps"
+
+
+def open_capture(config: dict, title: str | None = None) -> WindowCapture:
+    method = (config.get("capture") or {}).get("method", "auto")
+    cap = WindowCapture(title or config["window_title"], method=method)
+    print(f"窗口: {cap.title!r},抓图后端: {cap.method}")
+    if cap.elevation_mismatch():
+        print(
+            "警告:游戏以管理员运行而本脚本不是——截图可能被遮挡干扰、按键会被系统丢弃。\n"
+            "      请用管理员 PowerShell 重新运行(右键开始菜单 → Windows PowerShell(管理员))。"
+        )
+    return cap
+
+
+def grab_clean(cap: WindowCapture, overlay_window: str | None = None) -> np.ndarray:
+    """抓一帧干净画面:mss 后端会先关掉我们自己的浮窗并把游戏拉回前台,防止遮挡入镜。"""
+    if cap.method == "mss":
+        if overlay_window is not None:
+            try:
+                cv2.destroyWindow(overlay_window)
+            except cv2.error:
+                pass
+        cap.bring_to_foreground()
+    return cap.grab()
+
+
+PLAYER_TEMPLATE_DIR = TEMPLATES_DIR / "player"
+
+
+def has_player_templates() -> bool:
+    return PLAYER_TEMPLATE_DIR.exists() and any(PLAYER_TEMPLATE_DIR.glob("*.png"))
+
+
+def build_player_locator(config: dict):
+    """与 main.py 同一套定位策略:固定坐标 > 形象模板(含镜像)> 中心偏下兜底。"""
+    player_cfg = config.get("player") or {}
+    pos = player_cfg.get("pos")
+    if pos:
+        fixed = (int(pos[0]), int(pos[1]))
+        print(f"玩家定位:固定坐标 {fixed}(player.pos)")
+        return lambda frame: fixed
+    if has_player_templates():
+        templates = load_templates(PLAYER_TEMPLATE_DIR)
+        threshold = player_cfg.get("match_threshold", 0.7)
+        print(f"玩家定位:形象模板 templates/player/ ({len(templates)} 张含镜像)")
+        return lambda frame: find_player(frame, templates, threshold)
+    print("玩家定位:中心偏下兜底(仅镜头跟随的大地图准确;建议运行 calibrate player)")
+    return lambda frame: (frame.shape[1] // 2, round(frame.shape[0] * 0.6))
+
+
+def save_image(image: np.ndarray, path: Path) -> None:
+    """cv2.imwrite 不支持非 ASCII 路径,用 imencode + tofile 代替。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ok, buf = cv2.imencode(path.suffix, image)
+    if not ok:
+        raise RuntimeError(f"图像编码失败: {path}")
+    buf.tofile(str(path))
+
+
+def imread_bgr(path: Path) -> np.ndarray:
+    data = np.fromfile(str(path), dtype=np.uint8)
+    img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError(f"无法解码图像: {path}")
+    return img
+
+
+def draw_detections(frame: np.ndarray, detections: list[Detection]) -> np.ndarray:
+    canvas = frame.copy()
+    for d in detections:
+        cv2.rectangle(canvas, (d.x, d.y), (d.x + d.w, d.y + d.h), (0, 255, 0), 2)
+        cv2.putText(
+            canvas,
+            f"{d.template} {d.score:.2f}",
+            (d.x, max(12, d.y - 4)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (0, 255, 0),
+            1,
+        )
+    return canvas
+
+
+def cmd_screenshot(args: argparse.Namespace) -> None:
+    with open_capture(load_config(), args.title) as cap:
+        left, top, width, height = cap.client_rect()
+        print(f"客户区: 左上 ({left}, {top}),大小 {width}x{height}")
+        frame = grab_clean(cap)
+    out = CAPTURES_DIR / f"screenshot_{time.strftime('%Y%m%d_%H%M%S')}.png"
+    save_image(frame, out)
+    print(f"已保存 {out} ({frame.shape[1]}x{frame.shape[0]})")
+
+
+def cmd_template(args: argparse.Namespace) -> None:
+    config = load_config()
+    out_dir = TEMPLATES_DIR / args.map
+    out_dir.mkdir(parents=True, exist_ok=True)
+    print("操作说明:每轮重新抓一帧 → 鼠标框住一只怪 → 空格/回车确认保存;")
+    print("不框直接空格/回车(或按 c 取消)结束。窗口标题: select monster")
+    saved = 0
+    with open_capture(config) as cap:
+        while True:
+            frame = grab_clean(cap, overlay_window="select monster")
+            x, y, w, h = cv2.selectROI("select monster", frame, showCrosshair=True)
+            if w == 0 or h == 0:
+                break
+            crop = frame[y : y + h, x : x + w]
+            idx = 1
+            while (out_dir / f"monster_{idx:02d}.png").exists():
+                idx += 1
+            out = out_dir / f"monster_{idx:02d}.png"
+            save_image(crop, out)
+            saved += 1
+            print(f"已保存 {out} ({w}x{h})")
+    cv2.destroyAllWindows()
+    print(f"共保存 {saved} 张模板到 {out_dir}")
+
+
+def draw_platforms(canvas: np.ndarray, platforms: list[Platform], color=(255, 128, 0)) -> None:
+    for p in platforms:
+        cv2.line(canvas, (p.x1, p.y), (p.x2, p.y), color, 2)
+        cv2.circle(canvas, (p.x1, p.y), 4, color, -1)
+        cv2.circle(canvas, (p.x2, p.y), 4, color, -1)
+
+
+class PlatformEditor:
+    """鼠标交互编辑平台线:左键拖拽画线,右键删除最近的线。"""
+
+    CLICK_DELETE_DISTANCE = 10
+
+    def __init__(self, frame: np.ndarray, platforms: list[Platform]):
+        self.frame = frame
+        self.platforms = platforms
+        self.drag_start: tuple[int, int] | None = None
+        self.drag_now: tuple[int, int] | None = None
+
+    def on_mouse(self, event: int, x: int, y: int, _flags: int, _param) -> None:
+        if event == cv2.EVENT_LBUTTONDOWN:
+            self.drag_start = (x, y)
+            self.drag_now = (x, y)
+        elif event == cv2.EVENT_MOUSEMOVE and self.drag_start:
+            self.drag_now = (x, y)
+        elif event == cv2.EVENT_LBUTTONUP and self.drag_start:
+            x0, y0 = self.drag_start
+            if abs(x - x0) >= 10:  # 拖拽足够长才算画线,y 取按下点(强制水平)
+                self.platforms.append(Platform(x0, x, y0))
+            self.drag_start = self.drag_now = None
+        elif event == cv2.EVENT_RBUTTONDOWN:
+            self._delete_near(x, y)
+
+    def _delete_near(self, x: int, y: int) -> None:
+        def distance(p: Platform) -> float:
+            dx = max(p.x1 - x, 0, x - p.x2)
+            return (dx**2 + (p.y - y) ** 2) ** 0.5
+
+        if self.platforms:
+            nearest = min(self.platforms, key=distance)
+            if distance(nearest) <= self.CLICK_DELETE_DISTANCE:
+                self.platforms.remove(nearest)
+
+    def render(self) -> np.ndarray:
+        canvas = self.frame.copy()
+        draw_platforms(canvas, self.platforms)
+        if self.drag_start and self.drag_now:
+            cv2.line(canvas, self.drag_start, (self.drag_now[0], self.drag_start[1]), (0, 255, 255), 2)
+        cv2.putText(
+            canvas,
+            f"platforms: {len(self.platforms)}  [drag]=add  [right-click]=del  [s]=save  [q]=quit",
+            (8, 20),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (0, 255, 255),
+            2,
+        )
+        return canvas
+
+
+def cmd_platforms(args: argparse.Namespace) -> None:
+    config = load_config()
+    if args.image:
+        frame = imread_bgr(Path(args.image))
+    else:
+        with open_capture(config) as cap:
+            frame = grab_clean(cap)
+    if args.auto:
+        candidates = detect_platform_candidates(frame)
+        print(f"--auto:自动检测到 {len(candidates)} 条候选线(多半不准,请人工删改)")
+    else:
+        candidates = []
+        print("空白画布(加 --auto 可预填自动检测候选)")
+    print("操作:左键拖拽画平台线;右键点线附近删除;s 保存退出;q/Esc 放弃")
+
+    editor = PlatformEditor(frame, list(candidates))
+    cv2.namedWindow("platforms")
+    cv2.setMouseCallback("platforms", editor.on_mouse)
+    while True:
+        cv2.imshow("platforms", editor.render())
+        key = cv2.waitKey(30) & 0xFF
+        if key == ord("s"):
+            out = MAPS_DIR / f"{args.map}.yaml"
+            save_platforms(out, editor.platforms, (frame.shape[1], frame.shape[0]))
+            print(f"已保存 {len(editor.platforms)} 条平台线到 {out}")
+            break
+        if key in (27, ord("q")):
+            print("已放弃,未保存")
+            break
+    cv2.destroyAllWindows()
+
+
+def cmd_player(args: argparse.Namespace) -> None:
+    config = load_config()
+    PLAYER_TEMPLATE_DIR.mkdir(parents=True, exist_ok=True)
+    print("框住角色【形象】(连同脚底,别框进脚下名牌)——和截怪一样的逻辑。")
+    print("角色动作/朝向会变,建议多截几张:站立、走路、攻击各一张;")
+    print("每轮重新抓帧 → 框 → 空格/回车保存;不框直接空格/回车结束。窗口: select player")
+    saved = 0
+    with open_capture(config) as cap:
+        while True:
+            frame = grab_clean(cap, overlay_window="select player")
+            x, y, w, h = cv2.selectROI("select player", frame, showCrosshair=True)
+            if w == 0 or h == 0:
+                break
+            idx = 1
+            while (PLAYER_TEMPLATE_DIR / f"player_{idx:02d}.png").exists():
+                idx += 1
+            out = PLAYER_TEMPLATE_DIR / f"player_{idx:02d}.png"
+            save_image(frame[y : y + h, x : x + w], out)
+            saved += 1
+            print(f"已保存 {out} ({w}x{h})")
+    cv2.destroyAllWindows()
+    print(f"共保存 {saved} 张形象模板到 {PLAYER_TEMPLATE_DIR},preview/main 将自动使用")
+
+
+def cmd_preview(args: argparse.Namespace) -> None:
+    config = load_config()
+    combat = config.get("combat", {})
+    map_name = args.map or combat.get("map")
+    if not map_name:
+        raise SystemExit("请用 --map 指定地图名,或在配置 combat.map 中设置")
+    threshold = combat.get("match_threshold", DEFAULT_THRESHOLD)
+    templates = load_templates(TEMPLATES_DIR / map_name)
+    print(f"已加载 {len(templates)} 个模板(含镜像),阈值 {threshold}")
+
+    map_file = MAPS_DIR / f"{map_name}.yaml"
+    platforms = load_platforms(map_file) if map_file.exists() else []
+    print(f"已加载 {len(platforms)} 条平台线" if platforms else f"无平台数据({map_file} 不存在)")
+    y_tol = combat.get("y_tolerance", 20)
+    locate = build_player_locator(config)
+
+    def annotate(frame: np.ndarray, detections: list[Detection]) -> np.ndarray:
+        """诊断视图:怪物框+脚点+归属平台、平台线、玩家点+所在平台。
+
+        脚点绿色=与玩家同平台(会被攻击),橙色=不同平台/无平台(会被忽略)。
+        """
+        canvas = draw_detections(frame, detections)
+        draw_platforms(canvas, platforms)
+        player = locate(frame)
+        player_platform = platform_of(player, platforms, y_tol) if player else None
+        if player:
+            cv2.drawMarker(canvas, player, (0, 0, 255), cv2.MARKER_CROSS, 20, 2)
+            label = f"player y={player[1]} plat={'y' + str(player_platform.y) if player_platform else 'NONE!'}"
+            cv2.putText(canvas, label, (player[0] - 60, player[1] + 28),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+        else:
+            cv2.putText(canvas, "PLAYER NOT FOUND", (8, 44),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+        for d in detections:
+            feet = (d.center[0], d.y + d.h)
+            plat = platform_of(feet, platforms, y_tol)
+            same = plat is not None and plat == player_platform
+            color = (0, 255, 0) if same else (0, 165, 255)
+            cv2.circle(canvas, feet, 5, color, -1)
+            text = f"y{plat.y}" if plat else "no-plat"
+            cv2.putText(canvas, text, (feet[0] - 18, feet[1] + 16),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
+        return canvas
+
+    if args.image:
+        frame = imread_bgr(Path(args.image))
+        detections = find_monsters(frame, templates, threshold)
+        player = locate(frame)
+        player_platform = platform_of(player, platforms, y_tol) if player else None
+        print(f"玩家: {player},所在平台: {player_platform}")
+        for d in detections:
+            feet = (d.center[0], d.y + d.h)
+            plat = platform_of(feet, platforms, y_tol)
+            print(f"  {d.template} score={d.score:.3f} 框({d.x},{d.y},{d.w}x{d.h}) "
+                  f"脚点{feet} 平台={plat} 同平台={plat is not None and plat == player_platform}")
+        cv2.imshow("preview", annotate(frame, detections))
+        print("按任意键退出")
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+        return
+
+    print("实时预览中,按 q 或 Esc 退出(本工具不会按任何游戏键)")
+    with open_capture(config) as cap:
+        if cap.method == "mss":
+            print("提示:当前是 mss 抓屏,请把 preview 窗口拖到不遮挡游戏画面的位置")
+        while True:
+            start = time.monotonic()
+            frame = cap.grab()
+            detections = find_monsters(frame, templates, threshold)
+            canvas = annotate(frame, detections)
+            elapsed_ms = (time.monotonic() - start) * 1000
+            cv2.putText(
+                canvas,
+                f"{len(detections)} hits, {elapsed_ms:.0f} ms",
+                (8, 20),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (0, 255, 255),
+                1,
+            )
+            cv2.imshow("preview", canvas)
+            key = cv2.waitKey(50) & 0xFF
+            if key in (27, ord("q")):
+                break
+    cv2.destroyAllWindows()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(prog="calibrate", description="mxd_auto 标定工具")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_screenshot = sub.add_parser("screenshot", help="截取游戏客户区,验证截图链路")
+    p_screenshot.add_argument("--title", help="窗口标题子串(默认读配置 window_title)")
+    p_screenshot.set_defaults(func=cmd_screenshot)
+
+    p_template = sub.add_parser("template", help="框选怪物,保存模板图到 templates/<地图名>/")
+    p_template.add_argument("map", help="地图名(模板目录名)")
+    p_template.set_defaults(func=cmd_template)
+
+    p_platforms = sub.add_parser("platforms", help="标定平台线(自动检测 + 人工修正)")
+    p_platforms.add_argument("map", help="地图名(存到 maps/<地图名>.yaml)")
+    p_platforms.add_argument("--image", help="对静态截图标定,而不是实时抓屏")
+    p_platforms.add_argument("--auto", action="store_true", help="预填 HoughLines 自动检测候选(默认空白)")
+    p_platforms.set_defaults(func=cmd_platforms)
+
+    p_player = sub.add_parser("player", help="框选角色名牌 → templates/player.png(玩家定位锚点)")
+    p_player.set_defaults(func=cmd_player)
+
+    p_preview = sub.add_parser("preview", help="实时预览怪物识别+平台线+玩家点(不按任何键)")
+    p_preview.add_argument("--image", help="对静态截图运行识别,而不是实时抓屏")
+    p_preview.add_argument("--map", help="地图名(默认读配置 combat.map)")
+    p_preview.set_defaults(func=cmd_preview)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

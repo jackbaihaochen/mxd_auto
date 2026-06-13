@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# 虚拟环境
+.venv/
+venv/
+
+# 本地配置(包含个人按键设置等,不入库)
+config/config.yaml
+
+# 运行时产物
+logs/
+screenshots/
+captures/
+*.log
+
+# IDE
+.idea/
+.vscode/
+
+# 系统文件
+.DS_Store
+Thumbs.db
