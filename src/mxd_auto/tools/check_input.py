@@ -19,9 +19,6 @@ from mxd_auto.capture import WindowCapture
 from mxd_auto.config import load_config
 from mxd_auto.controller import Controller, is_known_key
 
-MAX_RUN_SECONDS = 30
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="按键链路验证")
     parser.add_argument("--key", help="只测这个键(每秒点按一次)")
@@ -75,10 +72,8 @@ def main() -> None:
         cap.close()
     print("已停止(热键)" if stop.is_set() else "测试结束")
 
-
 def run_full_loop(controller: Controller, cap: WindowCapture, keys: dict, stop: threading.Event) -> None:
-    print(f"开始测试,{MAX_RUN_SECONDS} 秒后自动结束")
-    end = time.monotonic() + MAX_RUN_SECONDS
+    print("开始测试,按 F12 停止")
 
     def walk(key: str, seconds: float) -> None:
         print(f"  按住 {key} {seconds}s")
@@ -86,24 +81,26 @@ def run_full_loop(controller: Controller, cap: WindowCapture, keys: dict, stop: 
         stop.wait(seconds)  # stop 触发立即返回,不用死板 sleep
         controller.release(key)
 
-    while not stop.is_set() and time.monotonic() < end:
+    while not stop.is_set():
         if not cap.is_foreground():
             controller.release_all()
             print("  窗口失焦,暂停(点回游戏窗口继续)")
             time.sleep(0.5)
             continue
-        walk("right", 1.0)
-        if stop.is_set():
-            break
-        walk("left", 1.0)
-        if stop.is_set():
-            break
-        print(f"  跳跃 ({keys['jump']})")
-        controller.press(keys["jump"])
-        stop.wait(0.5)
-        print(f"  攻击 ({keys['attack']}) x3")
-        controller.press(keys["attack"], presses=3)
-        stop.wait(0.5)
+        for i in range(100):
+            walk("right", 0.1)
+            if stop.is_set():
+                break
+            print(f"  攻击 ({keys['attack']})")
+            controller.press(keys["attack"], presses=1)
+            stop.wait(0.1)
+        for i in range(100):
+            walk("left", 0.1)
+            if stop.is_set():
+                break
+            print(f"  攻击 ({keys['attack']})")
+            controller.press(keys["attack"], presses=1)
+            stop.wait(0.1)
 
 
 if __name__ == "__main__":

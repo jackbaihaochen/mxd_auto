@@ -12,7 +12,7 @@ from typing import Sequence
 import cv2
 import numpy as np
 
-DEFAULT_THRESHOLD = 0.75
+DEFAULT_THRESHOLD = 0.5
 NMS_IOU_THRESHOLD = 0.3
 # 单模板命中数上限:平坦/过于普通的模板会在 TM_CCOEFF_NORMED 下匹配到海量位置,
 # 不设上限会让贪心 NMS O(n²) 卡死
