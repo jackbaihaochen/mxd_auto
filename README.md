@@ -49,9 +49,15 @@ python -m mxd_auto.tools.calibrate screenshot
 python -m mxd_auto.tools.calibrate template <地图名>
 
 # 2. 标定平台线:自动检测候选,左键拖拽补画、右键删除、s 保存
+#    注意:把角色能站的每一层平台都画上,没画的平台上的怪会被忽略
 python -m mxd_auto.tools.calibrate platforms <地图名>
 
-# 3. 预览识别效果(不按任何键,零风险):怪物框 + 平台线 + 玩家点
+# 2.5 标定玩家:框住角色脚下的名牌 → 运行时逐帧定位玩家
+#    (单屏固定镜头的小地图必须做这步,否则玩家位置全错)
+python -m mxd_auto.tools.calibrate player
+
+# 3. 预览识别效果(不按任何键,零风险):
+#    怪物框+脚点(绿=同平台会攻击,橙=会忽略)+ 平台线 + 玩家点
 python -m mxd_auto.tools.calibrate preview --map <地图名>
 
 # 4. 验证按键链路:角色走动出招,F12 立停
